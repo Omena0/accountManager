@@ -3,7 +3,7 @@ import rsa
 import pathlib
 import requests
 
-keysdir:str = 'keys'
+keysdir:str = 'apps'
 api_url:str = 'https://Omena0.github.io/api'
 
 os.makedirs(keysdir,exist_ok=True)
@@ -50,7 +50,9 @@ def _load(app:str):
     return pub, priv
 
 def get_pubkey(app:str,api_url:str=api_url):
-    return requests.get(f'{api_url}/{app}/keys/public.key').text
+    resp = requests.get(f'{api_url}/{app}/keys/public.key')
+    resp.raise_for_status()
+    return resp.text
 
 def load(app:str='all') -> None:
     global keys, apps
@@ -59,17 +61,21 @@ def load(app:str='all') -> None:
     
     if app == 'all':
         for app in apps:
-            keys[app] = _load(app)
-            for user in users[app]:
-                _load_licence(app,user)
-                if not check(app,user):
-                    licences[app].pop(user)
+            try:
+                keys[app] = _load(app)
+                for user in users[app]:
+                    _load_licence(app,user)
+                    if not check(app,user):
+                        licences[app].pop(user)
+            except: continue
         return keys
     
-    keys[app] = _load(app)
+    try:
+        keys[app] = _load(app)
     
-    for user in users[app]:
-        _load_licence(app,user)
+        for user in users[app]:
+            _load_licence(app,user)
+    except: return None
     
     return keys[app]
 
@@ -83,16 +89,32 @@ def make_keys(app:str):
     
     with open(os.path.join(keysdir, app, 'private.key'),'wb') as file: file.write(priv)
 
-def create(app:str,user:str=None,makeApp=False):
+def create_user(app:str,user:str=None):
+    if user is None: user = defaultUser
+    if user is None: raise ValueError('No user specified nor default user set.')
+    
+    # If app isint defined already maybe it hasent been loaded?
+    if app not in apps: load(app)
+    if app not in apps: raise ValueError('App doesent exist.')
+    
+    dir = os.path.join(keysdir,app,'users',user)
+    with open(dir,'wb') as f:
+        f.write(b'None')
+
+def create_app(app:str):
+    os.makedirs(os.path.join(keysdir,app,'users'),exist_ok=True)
+    make_keys(app)
+    load(app)
+
+def create_licence(app:str,user:str=None,makeApp=False):
     if user is None: user = defaultUser
     if user is None: raise ValueError('No user specified nor default user set.')
     
     # Create & load app if not already defined
     if app not in apps:
         if not makeApp: raise ValueError('App does not exist. Set makeApp to True to create a new app.')
-        os.makedirs(os.path.join(keysdir,app,'users'),exist_ok=True)
-        make_keys(app)
-        with open(os.path.join(keysdir,app,'users',user),'wb') as f: f.write(b'Well this is awkward')
+        create_app(app)
+        with open(os.path.join(keysdir,app,'users',user),'wb') as f: f.write(b'None')
         load(app)
         
     # Load app if not loaded
@@ -123,18 +145,40 @@ def check(app:str,user:str=None) -> int:
 
     Returns:
         int: Status code.
-            1: Valid, 0: User doesent exist, -1: Licence doesent exist, -2: App doesent exist, -3 Licence is invalid.
+             1: Valid
+             0: User doesent have licence
+            -1: User doesent exist
+            -2: Licence doesent exist
+            -3: App doesent exist
+            -4 Licence is invalid.
     """
-    if app not in apps: return -2
+    if app not in apps: return -3
     if user is None: user = defaultUser
     if user is None: raise ValueError('No user specified nor default user set.')
 
     if not os.path.exists(os.path.join(keysdir,app,'users',user)): return 0
-
+    if app not in licences.keys(): load(app)
+    if licences[app][user] == b'None':
+        return 0
+    
     try: rsa.verify(user.encode(), licences[app][user], keys[app][0])
-    except rsa.VerificationError: return -3
-    except KeyError: return -1
+    except rsa.VerificationError: return -4
+    except KeyError: return -2
     else: return 1
 
+def create(app:str,user:str,createLicence:bool=False,createApp:bool=False):
+    if user is None: user = defaultUser
+    if user is None: raise ValueError('No user specified nor default user set.')
+    if app not in apps: load(app)
+    if app not in apps: 
+        if not createApp: raise ValueError('App dosesent exist.')
+        create_app(app)
 
-__all__ = [keysdir,apps,keys,load,get_pubkey,create,check,setDefault]
+    if app not in keys.keys(): load(app)
+    if app not in keys.keys() and createApp: create_app(app)
+    if keys[app][1] and createLicence:
+        return create_licence(app,user,createApp)
+    return create_user(app,user)
+    
+
+__all__ = [keysdir,apps,keys,load,get_pubkey,create_licence,create_user,check,setDefault,make_keys]
